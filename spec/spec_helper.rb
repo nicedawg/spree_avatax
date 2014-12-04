@@ -1,6 +1,6 @@
 # Additional requirements
+require 'avatax_taxservice'
 require 'hashie'
-require 'avalara'
 require 'honeybadger'
 require 'pagerduty'
 
@@ -60,7 +60,9 @@ RSpec.configure do |config|
   config.include Spree::TestingSupport::UrlHelpers
 
   config.include ActionView::Helpers::TagHelper
-  config.include ActionView::Context 
+  config.include ActionView::Context
+  config.include SalesOrderSoapResponses
+  config.include SalesInvoiceSoapResponses
 
   # == Mock Framework
   #
@@ -75,6 +77,8 @@ RSpec.configure do |config|
   # Remove this line if you're not using ActiveRecord or ActiveRecord fixtures
   config.fixture_path = "#{::Rails.root}/spec/fixtures"
 
+  config.infer_spec_type_from_file_location!
+
   # Capybara javascript drivers require transactional fixtures set to false, and we use DatabaseCleaner
   # to cleanup after each test instead.  Without transactional fixtures set to false the records created
   # to setup a test will be unavailable to the browser, which runs under a seperate server instance.
@@ -87,9 +91,10 @@ RSpec.configure do |config|
   end
 
   # Before each spec check if it is a Javascript test and switch between using database transactions or not where necessary.
-  config.before :each do
+  config.before :each do |example|
     DatabaseCleaner.strategy = example.metadata[:js] ? :truncation : :transaction
     DatabaseCleaner.start
+    create(:tax_rate, calculator: create(:avatax_tax_calculator))
   end
 
   # After each spec clean the database.

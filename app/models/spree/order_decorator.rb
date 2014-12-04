@@ -1,32 +1,44 @@
 Spree::Order.class_eval do
 
-  ##
-  # Possible order states
-  # http://guides.spreecommerce.com/user/order_states.html
+  has_one  :avatax_sales_invoice, class_name: 'SpreeAvatax::SalesInvoice', inverse_of: :order
+  has_many :avatax_sales_orders,  class_name: 'SpreeAvatax::SalesOrder', inverse_of: :order
 
-  # Send Avatax the invoice after ther order is complete and ask them to store it
-  Spree::Order.state_machine.after_transition :to => :complete, :do => :commit_avatax_invoice
+  after_save :avatax_order_after_save
 
-  # Start calculating tax as soon as addresses are supplied
-  Spree::Order.state_machine.after_transition :from => :address, :do => :avatax_compute_tax
-
-  def avataxable?
-    line_items.present? && ship_address.present?
+  state_machine.after_transition from: :address do |order, transition|
+    SpreeAvatax::SalesOrder.generate(order)
   end
 
-  def promotion_adjustment_total
-    adjustments.promotion.eligible.sum(:amount).abs
+  state_machine.before_transition to: :confirm do |order, transition|
+    SpreeAvatax::SalesInvoice.generate(order)
   end
 
-  ##
-  # This method sends an invoice to Avalara which is stored in their system.
-  def commit_avatax_invoice
-    SpreeAvatax::TaxComputer.new(self, { doc_type: 'SalesInvoice', status_field: :avatax_invoice_at }).compute
+  state_machine.after_transition to: :complete do |order, transition|
+    SpreeAvatax::SalesInvoice.commit(order)
   end
 
-  ##
-  # Comute avatax but do not commit it their db
-  def avatax_compute_tax
-     SpreeAvatax::TaxComputer.new(self).compute
+  state_machine.after_transition to: :canceled do |order, transition|
+    SpreeAvatax::SalesInvoice.cancel(order)
   end
+
+  # The total of discounts and charges added at the order level.
+  # This intentionally excludes line item & shipment level discounts as those are sent to avatax
+  # by being wrapped into net amount of the line item/shipment itself.
+  def avatax_order_adjustment_total
+    # We invert the sign because avatax calls this the "discount" even though it can handle charges
+    # as well as discounts
+    -adjustments.non_tax.eligible.sum(:amount)
+  end
+
+  def avatax_order_after_save
+    # NOTE: DO NOT do anything that will trigger any saves inside of here.  It will cause infinite
+    #       recursion since it will cause another "after_save" to be called with the dirty attributes
+    #       in the same state. Instead just move the order out of the "confirm" state so that it
+    #       will have to go through tax calculations again.
+    if ship_address_id_changed? && confirm?
+      Rails.logger.info "[avatax] order address change detected for order #{number} while in confirm state. resetting order state to 'payment'."
+      update_columns(state: 'payment', updated_at: Time.now)
+    end
+  end
+
 end
